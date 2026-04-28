@@ -13,6 +13,7 @@ var cors = require("cors");
 const userRoute = require("./route/userRoute");
 const chatRoute = require("./route/chatRoute");
 const messageRoute = require("./route/messageRoutes");
+const callRoute = require("./route/callRoute");
 dotenv.config();
 app.use(cookieParser());
 app.use(express.json());
@@ -32,6 +33,7 @@ app.use(cors());
 app.use("/api/user", userRoute);
 app.use("/api/chat", chatRoute);
 app.use("/api/message", messageRoute);
+app.use("/api/call", callRoute);
 
 // error handler (should be after routes)
 app.use(errorMiddleware);
@@ -115,5 +117,48 @@ io.on("connection", (socket) => {
 
       socket.in(user._id).emit("message recieved", newMessageRecieved);
     });
+  });
+
+  // call signaling
+  socket.on("initiate call", (callData) => {
+    const { receiverId, callerId, callerName, callerPic } = callData;
+    socket.in(receiverId).emit("incoming call", {
+      callerId,
+      callerName,
+      callerPic,
+      ...callData,
+    });
+  });
+
+  socket.on("call accepted", (callData) => {
+    const { receiverId, callerId } = callData;
+    socket.in(callerId).emit("call answered", callData);
+    socket.in(receiverId).emit("call answered", callData);
+  });
+
+  socket.on("call rejected", (callData) => {
+    const { receiverId, callerId } = callData;
+    socket.in(callerId).emit("call rejected", callData);
+  });
+
+  socket.on("send offer", (data) => {
+    const { to } = data;
+    socket.in(to).emit("receive offer", data);
+  });
+
+  socket.on("send answer", (data) => {
+    const { to } = data;
+    socket.in(to).emit("receive answer", data);
+  });
+
+  socket.on("send ice candidate", (data) => {
+    const { to } = data;
+    socket.in(to).emit("receive ice candidate", data);
+  });
+
+  socket.on("end call", (callData) => {
+    const { callerId, receiverId } = callData;
+    socket.in(callerId).emit("call ended", callData);
+    socket.in(receiverId).emit("call ended", callData);
   });
 });

@@ -8,7 +8,7 @@ import EmojiEmotionsIcon from "@mui/icons-material/EmojiEmotions";
 import Send from "@mui/icons-material/Send";
 import {  Box, Text } from "@chakra-ui/layout";
 import "./styles.css";
-import { IconButton, Spinner, useToast } from "@chakra-ui/react";
+import { IconButton, Spinner, useToast, useDisclosure } from "@chakra-ui/react";
 import { getSender, getSenderFull } from "../config/ChatLogics";
 import { useEffect, useState } from "react";
 import axios from "axios";
@@ -22,6 +22,9 @@ import backgroundImage from "../img/img.jpg";
 import io from "socket.io-client";
 import UpdateGroupChatModal from "./miscellaneous/UpdateGroupChatModal";
 import { ChatState } from "../Context/ChatProvider";
+import CallButton from "./CallButton";
+import IncomingCallModal from "./IncomingCallModal";
+import CallInterfaceWithRTC from "./CallInterfaceWithRTC";
 
 const ENDPOINT = window.location.hostname === "localhost"
   ? "http://localhost:5000"
@@ -35,6 +38,24 @@ const SingleChat = ({ fetchAgain, setFetchAgain }) => {
   const [socketConnected, setSocketConnected] = useState(false);
   const [typing, setTyping] = useState(false);
   const [istyping, setIsTyping] = useState(false);
+  const [callActive, setCallActive] = useState(false);
+  const [callType, setCallType] = useState(null); // "audio" or "video"
+  const [callDuration, setCallDuration] = useState("00:00");
+  const [incomingCall, setIncomingCall] = useState(null);
+  const [callStartTime, setCallStartTime] = useState(null);
+  
+  const {
+    isOpen: isIncomingCallOpen,
+    onOpen: onIncomingCallOpen,
+    onClose: onIncomingCallClose,
+  } = useDisclosure();
+  
+  const {
+    isOpen: isCallInterfaceOpen,
+    onOpen: onCallInterfaceOpen,
+    onClose: onCallInterfaceClose,
+  } = useDisclosure();
+
   const toast = useToast();
 
   const defaultOptions = {
@@ -91,9 +112,13 @@ const SingleChat = ({ fetchAgain, setFetchAgain }) => {
   };
 
  
-// sendMessage is used to send message on clicking send button
+// sendMessage is used to send message on clicking send button or pressing Enter
   const sendMessage = async (event) => {
-    if (newMessage && event.key === "Enter") {
+    // Check if it's a keyboard event with Enter key OR a click event
+    const isEnterKey = event.key === "Enter";
+    const isClickEvent = event.type === "click";
+
+    if (newMessage && (isEnterKey || isClickEvent)) {
       socket.emit("stop typing", selectedChat._id);
       try {
         const config = {
@@ -133,6 +158,35 @@ const SingleChat = ({ fetchAgain, setFetchAgain }) => {
     socket.on("connected", () => setSocketConnected(true));
     socket.on("typing", () => setIsTyping(true));
     socket.on("stop typing", () => setIsTyping(false));
+
+    // Call event listeners
+    socket.on("incoming call", (callData) => {
+      setIncomingCall(callData);
+      onIncomingCallOpen();
+    });
+
+    socket.on("call answered", (callData) => {
+      setCallActive(true);
+      onCallInterfaceOpen();
+    });
+
+    socket.on("call rejected", (callData) => {
+      toast({
+        title: "Call Rejected",
+        description: "The user rejected your call",
+        status: "info",
+        duration: 3000,
+        isClosable: true,
+        position: "bottom",
+      });
+    });
+
+    socket.on("call ended", (callData) => {
+      setCallActive(false);
+      onCallInterfaceClose();
+      setCallStartTime(null);
+      setCallDuration("00:00");
+    });
 
     // eslint-disable-next-line
   }, []);
@@ -181,6 +235,107 @@ const SingleChat = ({ fetchAgain, setFetchAgain }) => {
     }, timerLength);
   };
 
+  // Call duration timer
+  useEffect(() => {
+    let interval;
+    if (callActive && callStartTime) {
+      interval = setInterval(() => {
+        const now = new Date();
+        const diff = Math.floor((now - callStartTime) / 1000);
+        const minutes = Math.floor(diff / 60);
+        const seconds = diff % 60;
+        setCallDuration(
+          `${minutes.toString().padStart(2, "0")}:${seconds
+            .toString()
+            .padStart(2, "0")}`
+        );
+      }, 1000);
+    }
+    return () => clearInterval(interval);
+  }, [callActive, callStartTime]);
+
+  // Call handler functions
+  const initiateCall = (type) => {
+    if (!selectedChat || selectedChat.isGroupChat) {
+      toast({
+        title: "Error",
+        description: "Cannot call in group chats",
+        status: "error",
+        duration: 3000,
+        isClosable: true,
+        position: "bottom",
+      });
+      return;
+    }
+
+    const receiverId = selectedChat.users.find(
+      (u) => u._id !== user._id
+    )?._id;
+
+    if (!receiverId) {
+      toast({
+        title: "Error",
+        description: "Could not find receiver",
+        status: "error",
+        duration: 3000,
+        isClosable: true,
+        position: "bottom",
+      });
+      return;
+    }
+
+    setCallType(type);
+    setCallActive(true);
+    setCallStartTime(new Date());
+    onCallInterfaceOpen();
+
+    socket.emit("initiate call", {
+      receiverId,
+      callerId: user._id,
+      callerName: user.name,
+      callerPic: user.pic,
+      callType: type,
+    });
+  };
+
+  const handleAcceptCall = () => {
+    setCallType(incomingCall?.callType || "audio");
+    setCallActive(true);
+    setCallStartTime(new Date());
+    
+    socket.emit("call accepted", {
+      callerId: incomingCall?.callerId,
+      receiverId: user._id,
+    });
+
+    onIncomingCallClose();
+    onCallInterfaceOpen();
+  };
+
+  const handleRejectCall = () => {
+    socket.emit("call rejected", {
+      callerId: incomingCall?.callerId,
+      receiverId: user._id,
+    });
+    setIncomingCall(null);
+    onIncomingCallClose();
+  };
+
+  const handleEndCall = async () => {
+    const receiverId = selectedChat.users.find(
+      (u) => u._id !== user._id
+    )?._id;
+
+    socket.emit("end call", {
+      callerId: user._id,
+      receiverId,
+    });
+
+    setCallActive(false);
+    setCallStartTime(null);
+    setCallDuration("00:00");
+  };
+
   return (
     <>
       {selectedChat ? (
@@ -210,14 +365,21 @@ const SingleChat = ({ fetchAgain, setFetchAgain }) => {
             {messages &&
               (!selectedChat.isGroupChat ? (
                 <>
-                  {getSender(user, selectedChat.users)}
-                  <ProfileModal
-                    user={getSenderFull(user, selectedChat.users)}
-                  />
+                  <div style={{ flex: 1 }}>{getSender(user, selectedChat.users)}</div>
+                  <div style={{ display: "flex", gap: "15px", alignItems: "center" }}>
+                    <CallButton
+                      onAudioCall={() => initiateCall("audio")}
+                      onVideoCall={() => initiateCall("video")}
+                      isDisabled={callActive}
+                    />
+                    <ProfileModal
+                      user={getSenderFull(user, selectedChat.users)}
+                    />
+                  </div>
                 </>
               ) : (
                 <>
-                  {selectedChat.chatName.toUpperCase()}
+                  <div style={{ flex: 1 }}>{selectedChat.chatName.toUpperCase()}</div>
                   <UpdateGroupChatModal
                     fetchMessages={fetchMessages}
                     fetchAgain={fetchAgain}
@@ -248,7 +410,7 @@ const SingleChat = ({ fetchAgain, setFetchAgain }) => {
               />
             ) : (
               <div className="messages">
-                <ScrollableChat messages={messages} />
+                <ScrollableChat messages={messages} setMessages={setMessages} />
               </div>
             )}
 
@@ -321,6 +483,31 @@ const SingleChat = ({ fetchAgain, setFetchAgain }) => {
           </Text>
         </Box>
       )}
+
+      {/* Incoming Call Modal */}
+      <IncomingCallModal
+        isOpen={isIncomingCallOpen}
+        onClose={onIncomingCallClose}
+        callerData={incomingCall}
+        onAccept={handleAcceptCall}
+        onReject={handleRejectCall}
+      />
+
+      {/* Call Interface with WebRTC */}
+      <CallInterfaceWithRTC
+        isOpen={isCallInterfaceOpen}
+        onClose={onCallInterfaceClose}
+        callType={callType}
+        otherUserData={
+          selectedChat &&
+          !selectedChat.isGroupChat &&
+          getSenderFull(user, selectedChat.users)
+        }
+        onEndCall={handleEndCall}
+        callDuration={callDuration}
+        socket={socket}
+        userId={user._id}
+      />
     </>
   );
 };

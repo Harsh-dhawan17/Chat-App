@@ -27,7 +27,7 @@ const Login = () => {
   // const [loading, setLoading] = useState(false);
   const toast = useToast();
   const history = useHistory();
-const { isAuth ,setIsAuth } = ChatState();
+const { isAuth ,setIsAuth, setUser } = ChatState();
  const handleEmailChange = (event) => {
    const newEmail = event.target.value;
    setEmail(newEmail);
@@ -83,6 +83,7 @@ const { isAuth ,setIsAuth } = ChatState();
         position: "bottom",
       });
       localStorage.setItem("userInfo", JSON.stringify(data));
+      setUser(data);
          setTimeout(() => {
         setIsAuth(false);
         history.push("/chats");

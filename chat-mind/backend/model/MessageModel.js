@@ -20,6 +20,13 @@ const messageSchema = new mongoose.Schema(
         ref: "userModel",
       },
     ],
+    deleted: {
+      type: Boolean,
+      default: false,
+    },
+    deletedAt: {
+      type: Date,
+    },
   },
   { timestamps: true }
 ); 
